@@ -25,6 +25,9 @@ coverage/
 .env
 .env.local
 
+# Claude
+CLAUDE.md
+
 # Package manager locks (keep package-lock.json)
 yarn.lock
 pnpm-lock.yaml
