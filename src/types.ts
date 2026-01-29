@@ -33,9 +33,18 @@ export interface RepoFetchResult {
   branch: string;
   truncated: boolean;
   files: FileEntry[];
+  rateLimit?: RateLimitInfo;
+  isAuthenticated?: boolean;
 }
 
 export type EntryType = "file" | "dir" | "all";
+
+export interface RateLimitInfo {
+  limit: number;
+  remaining: number;
+  used: number;
+  reset: Date;
+}
 
 export interface RepoFetchOptions {
   branch?: string;

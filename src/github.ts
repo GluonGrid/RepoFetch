@@ -1,19 +1,44 @@
-import type { TreeResponse, BlobResponse } from "./types.js";
+import type { TreeResponse, BlobResponse, RateLimitInfo } from "./types.js";
 
 const API_BASE = "https://api.github.com";
 
 export class GitHubClient {
   private token?: string;
   private headers: Record<string, string>;
+  private _rateLimit: RateLimitInfo | null = null;
 
   constructor(token?: string) {
     this.token = token;
     this.headers = {
       Accept: "application/vnd.github.v3+json",
-      "User-Agent": "gtree-cli",
+      "User-Agent": "repofetch-cli",
     };
     if (token) {
       this.headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+
+  get isAuthenticated(): boolean {
+    return !!this.token;
+  }
+
+  get rateLimit(): RateLimitInfo | null {
+    return this._rateLimit;
+  }
+
+  private updateRateLimit(res: Response): void {
+    const limit = res.headers.get("X-RateLimit-Limit");
+    const remaining = res.headers.get("X-RateLimit-Remaining");
+    const used = res.headers.get("X-RateLimit-Used");
+    const reset = res.headers.get("X-RateLimit-Reset");
+
+    if (limit && remaining && used && reset) {
+      this._rateLimit = {
+        limit: parseInt(limit, 10),
+        remaining: parseInt(remaining, 10),
+        used: parseInt(used, 10),
+        reset: new Date(parseInt(reset, 10) * 1000),
+      };
     }
   }
 
@@ -21,6 +46,7 @@ export class GitHubClient {
     const res = await fetch(`${API_BASE}/repos/${repo}`, {
       headers: this.headers,
     });
+    this.updateRateLimit(res);
 
     if (!res.ok) {
       if (res.status === 404) {
@@ -42,6 +68,7 @@ export class GitHubClient {
     let res = await fetch(`${API_BASE}/repos/${repo}/commits/${targetBranch}`, {
       headers: this.headers,
     });
+    this.updateRateLimit(res);
 
     // If branch not found, try default branch
     if (!res.ok && (res.status === 404 || res.status === 422)) {
@@ -49,6 +76,7 @@ export class GitHubClient {
       res = await fetch(`${API_BASE}/repos/${repo}/commits/${targetBranch}`, {
         headers: this.headers,
       });
+      this.updateRateLimit(res);
     }
 
     if (!res.ok) {
@@ -66,6 +94,7 @@ export class GitHubClient {
       `${API_BASE}/repos/${repo}/git/trees/${treeSha}?recursive=1`,
       { headers: this.headers }
     );
+    this.updateRateLimit(treeRes);
 
     if (!treeRes.ok) {
       throw new Error(`Failed to get tree: ${treeRes.status} ${treeRes.statusText}`);
@@ -79,6 +108,7 @@ export class GitHubClient {
     const res = await fetch(`${API_BASE}/repos/${repo}/git/blobs/${sha}`, {
       headers: this.headers,
     });
+    this.updateRateLimit(res);
 
     if (!res.ok) {
       throw new Error(`Failed to get blob: ${res.status} ${res.statusText}`);
