@@ -221,25 +221,17 @@ Future features under consideration:
 
 ### Rate Limit Handling
 
-- [ ] **Smart rate limiting** - Monitor `x-ratelimit-remaining` headers and auto-throttle requests
-- [ ] **Rate limit warnings** - Warn users when approaching limits, suggest authentication
+- [x] **Rate limit warnings** - Warn users when approaching limits, suggest authentication
 - [ ] **Auto-detect GitHub token** - Check `gh auth token`, git credentials, or `~/.config/gh/hosts.yml`
-- [ ] **Retry with backoff** - Automatic retry with exponential backoff on 429/403 responses
-- [ ] **Concurrent request handling** - Respect GitHub's 100 concurrent request limit for multi-agent scenarios
 
 ### Additional Providers
 
 - [ ] **GitLab support** - `repofetch gitlab:owner/repo` or `repofetch --provider gitlab owner/repo`
-- [ ] **Bitbucket support** - `repofetch bitbucket:owner/repo`
-- [ ] **Gitea/Forgejo support** - Self-hosted Git platforms
-- [ ] **Azure DevOps support** - `repofetch azure:org/project/repo`
 
 ### Enhanced Features
 
-- [ ] **File descriptions** - AI-generated summaries of file contents
-- [ ] **Search within tree** - Filter by filename patterns (`--name "*.test.*"`)
-- [ ] **Diff between branches** - `repofetch owner/repo --diff main..feature`
 - [ ] **Output to file** - `repofetch owner/repo -o tree.json`
+- [ ] **Diff between branches** - `repofetch owner/repo --diff main..feature`
 - [ ] **Cache layer** - Local caching to reduce API calls
 
 Contributions welcome! Feel free to open an issue or PR.
