@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
+import { program } from "commander";
 import { repofetch } from "./index.js";
 import { formatOutput, formatContentOutput } from "./output.js";
 import type { OutputFormat } from "./output.js";
-import type { EntryType } from "./types.js";
+import type { EntryType, RateLimitInfo } from "./types.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -15,114 +16,6 @@ const pkg = require("../package.json");
 
 const CONFIG_PATH = path.join(os.homedir(), ".repofetch");
 
-const HELP = `
-repofetch - Fetch and explore remote repository structures and contents
-
-Usage:
-  repofetch <owner/repo> [options]
-
-Options:
-  -b, --branch <name>      Branch to fetch (default: main, falls back to default branch)
-  -t, --token <token>      GitHub personal access token
-  --save-token <token>     Save token to ~/.repofetch for future use
-
-Filtering:
-  -e, --ext <extensions>   Filter by file extensions (comma-separated: .ts,.js)
-  --type <type>            Filter by entry type: file, dir, all (default: all)
-  --exclude <patterns>     Exclude patterns (comma-separated: node_modules,dist)
-  --include <patterns>     Include only matching patterns
-
-Content:
-  -c, --content            Fetch file contents (use with --ext or --sha)
-  --sha <shas>             Fetch content for specific files by SHA (comma-separated)
-  --max-size <bytes>       Max file size to fetch content (default: 1MB)
-  --concurrency <n>        Concurrent requests for content (default: 5)
-
-Output:
-  -f, --format <format>    Output format: ascii, json, json-pretty, paths (default: ascii)
-  --icons                  Show file/folder icons in ascii output
-  --size                   Show file sizes in ascii output
-
-Other:
-  -v, --version            Show version
-  -h, --help               Show this help
-
-Examples:
-  repofetch facebook/react
-  repofetch microsoft/typescript -b main --ext .ts,.tsx
-  repofetch owner/repo --exclude node_modules,dist --format json
-  repofetch owner/repo --ext .md --content --format json-pretty
-`;
-
-interface Args {
-  repo?: string;
-  branch?: string;
-  token?: string;
-  saveToken?: string;
-  extensions?: string[];
-  exclude?: string[];
-  include?: string[];
-  type?: EntryType;
-  content?: boolean;
-  shas?: string[];
-  maxSize?: number;
-  concurrency?: number;
-  format?: OutputFormat;
-  icons?: boolean;
-  showSize?: boolean;
-  help?: boolean;
-  version?: boolean;
-}
-
-function parseArgs(argv: string[]): Args {
-  const args: Args = {};
-  let i = 0;
-
-  while (i < argv.length) {
-    const arg = argv[i];
-
-    if (arg === "-h" || arg === "--help") {
-      args.help = true;
-    } else if (arg === "-v" || arg === "--version") {
-      args.version = true;
-    } else if (arg === "-b" || arg === "--branch") {
-      args.branch = argv[++i];
-    } else if (arg === "-t" || arg === "--token") {
-      args.token = argv[++i];
-    } else if (arg === "--save-token") {
-      args.saveToken = argv[++i];
-    } else if (arg === "-e" || arg === "--ext") {
-      args.extensions = argv[++i]?.split(",").map((e) => e.trim());
-    } else if (arg === "--exclude") {
-      args.exclude = argv[++i]?.split(",").map((e) => e.trim());
-    } else if (arg === "--include") {
-      args.include = argv[++i]?.split(",").map((e) => e.trim());
-    } else if (arg === "--type") {
-      args.type = argv[++i] as EntryType;
-    } else if (arg === "-c" || arg === "--content") {
-      args.content = true;
-    } else if (arg === "--sha") {
-      args.shas = argv[++i]?.split(",").map((s) => s.trim());
-    } else if (arg === "--max-size") {
-      args.maxSize = parseInt(argv[++i], 10);
-    } else if (arg === "--concurrency") {
-      args.concurrency = parseInt(argv[++i], 10);
-    } else if (arg === "-f" || arg === "--format") {
-      args.format = argv[++i] as OutputFormat;
-    } else if (arg === "--icons") {
-      args.icons = true;
-    } else if (arg === "--size") {
-      args.showSize = true;
-    } else if (!arg.startsWith("-") && !args.repo) {
-      args.repo = arg;
-    }
-
-    i++;
-  }
-
-  return args;
-}
-
 function loadToken(): string | undefined {
   try {
     return fs.readFileSync(CONFIG_PATH, "utf-8").trim();
@@ -133,7 +26,28 @@ function loadToken(): string | undefined {
 
 function saveToken(token: string): void {
   fs.writeFileSync(CONFIG_PATH, token, { mode: 0o600 });
-  console.log(`Token saved to ${CONFIG_PATH}`);
+  console.error(`Token saved to ${CONFIG_PATH}`);
+}
+
+function formatRateLimit(rateLimit: RateLimitInfo): string {
+  const resetIn = Math.max(
+    0,
+    Math.ceil((rateLimit.reset.getTime() - Date.now()) / 1000 / 60)
+  );
+  return `Rate limit: ${rateLimit.remaining}/${rateLimit.limit} remaining (resets in ${resetIn}m)`;
+}
+
+function shouldShowRateLimit(
+  isAuthenticated: boolean,
+  rateLimit: RateLimitInfo | undefined
+): boolean {
+  if (!rateLimit) return false;
+
+  // Unauthenticated: always show (to encourage adding token)
+  if (!isAuthenticated) return true;
+
+  // Authenticated: only show when remaining < 1000 (approaching limit)
+  return rateLimit.remaining < 1000;
 }
 
 function copyToClipboard(text: string): boolean {
@@ -151,74 +65,105 @@ function copyToClipboard(text: string): boolean {
   }
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-
-  if (args.version) {
-    console.log(pkg.version);
-    process.exit(0);
-  }
-
-  if (args.help || !args.repo) {
-    console.log(HELP);
-    process.exit(args.help ? 0 : 1);
-  }
-
-  if (args.saveToken) {
-    saveToken(args.saveToken);
-    process.exit(0);
-  }
-
-  const token = args.token || loadToken() || process.env.GITHUB_TOKEN;
-  const isJsonFormat = args.format === "json" || args.format === "json-pretty";
-
-  if (!isJsonFormat) {
-    console.error(`\n📦 Fetching ${args.repo}...`);
-  }
-
-  try {
-    const result = await repofetch(args.repo, {
-      branch: args.branch,
-      token,
-      extensions: args.extensions,
-      exclude: args.exclude,
-      include: args.include,
-      type: args.type,
-      content: args.content,
-      shas: args.shas,
-      maxFileSize: args.maxSize,
-      concurrency: args.concurrency,
-    });
-
-    const output = formatOutput(result, {
-      format: args.format || "ascii",
-      icons: args.icons,
-      showSize: args.showSize,
-      showContent: args.content,
-    });
-
-    console.log(output);
-
-    // For ascii output, also show content separately if fetched
-    if (!isJsonFormat && args.content) {
-      console.log(formatContentOutput(result));
-    }
-
-    // Copy to clipboard for ascii format
-    if (!isJsonFormat) {
-      if (copyToClipboard(output)) {
-        console.error(`\n✨ Tree copied to clipboard!`);
-      }
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (isJsonFormat) {
-      console.log(JSON.stringify({ error: message }));
-    } else {
-      console.error(`\n❌ Error: ${message}`);
-    }
-    process.exit(1);
-  }
+function parseList(value: string): string[] {
+  return value.split(",").map((s) => s.trim());
 }
 
-main();
+program
+  .name("repofetch")
+  .description("Fetch and explore remote repository structures and contents")
+  .version(pkg.version)
+  .argument("<repo>", "Repository in owner/repo format")
+  // Options
+  .option("-b, --branch <name>", "Branch to fetch (default: main)")
+  .option("-t, --token <token>", "GitHub personal access token")
+  .option("--save-token <token>", "Save token to ~/.repofetch for future use")
+  // Filtering
+  .option("-e, --ext <extensions>", "Filter by file extensions (comma-separated)", parseList)
+  .option("--type <type>", "Filter by entry type: file, dir, all", "all")
+  .option("--exclude <patterns>", "Exclude patterns (comma-separated)", parseList)
+  .option("--include <patterns>", "Include only matching patterns", parseList)
+  // Content
+  .option("-c, --content", "Fetch file contents")
+  .option("--sha <shas>", "Fetch content for specific files by SHA (comma-separated)", parseList)
+  .option("--max-size <bytes>", "Max file size to fetch content (default: 1MB)", parseInt)
+  .option("--concurrency <n>", "Concurrent requests for content (default: 5)", parseInt)
+  // Output
+  .option("-f, --format <format>", "Output format: ascii, json, json-pretty, paths", "ascii")
+  .option("--icons", "Show file/folder icons in ascii output")
+  .option("--size", "Show file sizes in ascii output")
+  .action(async (repo: string, options) => {
+    // Save token if provided
+    if (options.saveToken) {
+      saveToken(options.saveToken);
+    }
+
+    const token =
+      options.saveToken || options.token || loadToken() || process.env.GITHUB_TOKEN;
+    const isJsonFormat = options.format === "json" || options.format === "json-pretty";
+
+    if (!isJsonFormat) {
+      console.error(`\n📦 Fetching ${repo}...`);
+    }
+
+    try {
+      const result = await repofetch(repo, {
+        branch: options.branch,
+        token,
+        extensions: options.ext,
+        exclude: options.exclude,
+        include: options.include,
+        type: options.type as EntryType,
+        content: options.content,
+        shas: options.sha,
+        maxFileSize: options.maxSize,
+        concurrency: options.concurrency,
+      });
+
+      const output = formatOutput(result, {
+        format: options.format as OutputFormat,
+        icons: options.icons,
+        showSize: options.size,
+        showContent: options.content,
+      });
+
+      console.log(output);
+
+      // For ascii output, also show content separately if fetched
+      if (!isJsonFormat && options.content) {
+        console.log(formatContentOutput(result));
+      }
+
+      // Copy to clipboard for ascii format
+      if (!isJsonFormat) {
+        if (copyToClipboard(output)) {
+          console.error(`\n✨ Tree copied to clipboard!`);
+        }
+
+        // Show rate limit info
+        if (shouldShowRateLimit(result.isAuthenticated ?? false, result.rateLimit)) {
+          if (result.rateLimit) {
+            const rateLimitMsg = formatRateLimit(result.rateLimit);
+            if (!result.isAuthenticated) {
+              console.error(`\n⚠️  ${rateLimitMsg}`);
+              console.error(
+                `   Tip: Use --token or --save-token to increase limit to 5000/hour`
+              );
+            } else {
+              console.error(`\n⚠️  ${rateLimitMsg}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isJsonFormat) {
+        console.log(JSON.stringify({ error: message }));
+      } else {
+        console.error(`\n❌ Error: ${message}`);
+      }
+      process.exit(1);
+    }
+  });
+
+program.parse();

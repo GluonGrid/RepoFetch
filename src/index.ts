@@ -10,6 +10,7 @@ export type {
   RepoFetchResult,
   RepoFetchOptions,
   EntryType,
+  RateLimitInfo,
 } from "./types.js";
 export type { FilterOptions } from "./filter.js";
 export type { FetchContentOptions } from "./content.js";
@@ -70,6 +71,8 @@ export async function repofetch(
     branch: actualBranch,
     truncated: tree.truncated,
     files: entries,
+    rateLimit: client.rateLimit ?? undefined,
+    isAuthenticated: client.isAuthenticated,
   };
 }
 
