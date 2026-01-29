@@ -1,6 +1,6 @@
 {
     "name": "repofetch",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Fetch and explore remote repository structures and file contents without cloning - built for AI agents",
     "type": "module",
     "main": "dist/index.js",
